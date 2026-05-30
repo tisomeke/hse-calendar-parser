@@ -1,0 +1,91 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build with PyInstaller (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller --onefile \
+            --name "hse-parser-${{ runner.os }}" \
+            --add-data "hse_parser:hse_parser" \
+            --add-data "hse_schedule_parser:hse_schedule_parser" \
+            hse_schedule_parser/__main__.py
+
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --onefile `
+            --name "hse-parser-Windows" `
+            --add-data "hse_parser;hse_parser" `
+            --add-data "hse_schedule_parser;hse_schedule_parser" `
+            hse_schedule_parser/__main__.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hse-parser-${{ runner.os }}
+          path: dist/hse-parser-*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: HSE Schedule Parser ${{ github.ref_name }}
+          body: |
+            ## HSE Schedule Parser ${{ github.ref_name }}
+
+            ### Скачать
+            - [Linux](artifacts/hse-parser-Linux/hse-parser-Linux)
+            - [macOS](artifacts/hse-parser-macOS/hse-parser-macOS)
+            - [Windows](artifacts/hse-parser-Windows/hse-parser-Windows.exe)
+
+            ### Установка через pip
+            ```bash
+            pip install hse-parser
+            ```
+
+            ### Что нового
+            См. [CHANGELOG](CHANGELOG.md)
+          files: |
+            artifacts/**/*
+          draft: false
+          prerelease: false
