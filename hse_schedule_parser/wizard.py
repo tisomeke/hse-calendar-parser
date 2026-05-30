@@ -99,28 +99,69 @@ class WizardState:
 # ── Step 1: File Selection ──────────────────────────────────────────────
 
 
+def _find_excel_in_root() -> list[Path]:
+    """Scan the project root directory for .xlsx files."""
+    root = Path.cwd()
+    return sorted(root.glob("*.xlsx"))
+
+
 def step_file(state: WizardState) -> WizardState | None:
     """Step 1: Select the Excel file with the schedule.
 
-    User must provide a path to the .xlsx file.
-    If a previous file exists, offers to reuse it.
+    Scans the project root for .xlsx files. If found, offers a choice:
+      1 — use the found file
+      2 — specify full path manually
+    If no .xlsx is found in root, shows an error and offers:
+      1 — check again (after user placed the file)
+      2 — specify full path manually
     """
-    show_info(
-        "Выбери Excel-файл с расписанием.\n"
-        "Обычно он называется что-то вроде '1_курс_2_модуль.xlsx'.\n"
-        "Скопируй файл в текущую папку или укажи полный путь."
-    )
+    found = _find_excel_in_root()
 
-    # If we have a last file path, offer to reuse it
-    if state.file_path and Path(state.file_path).exists():
-        reuse = ask_confirm(
-            f"📂 Использовать прошлый файл?\n{state.file_path}",
-            default=True,
+    if found:
+        # File(s) found in root — offer choice
+        file_list = "\n".join(f"  • {f.name}" for f in found)
+        show_info(
+            "📂 Найдены файлы в текущей директории:\n"
+            f"{file_list}\n\n"
+            "Выбери действие:"
         )
-        if reuse is None:
+        choice = ask_choice(
+            "Что делаем?",
+            choices=[
+                f"1 — продолжить с найденным файлом: {found[0].name}",
+                "2 — указать полный путь к таблице с расписанием",
+            ],
+            default=f"1 — продолжить с найденным файлом: {found[0].name}",
+        )
+        if choice is None:
             return None
-        if reuse:
+
+        if choice.startswith("1"):
+            state.file_path = str(found[0].resolve())
             return state
+
+        # Fall through to manual path input
+    else:
+        # No files found in root
+        show_error(
+            "В этой директории файл не найден.",
+            "Перемести файл с таблицей в эту директорию или укажи полный путь.",
+        )
+        choice = ask_choice(
+            "Что делаем?",
+            choices=[
+                "1 — я переместил(а) файл, проверить снова",
+                "2 — указать полный путь к таблице с расписанием",
+            ],
+            default="1 — я переместил(а) файл, проверить снова",
+        )
+        if choice is None:
+            return None
+
+        if choice.startswith("1"):
+            return step_file(state)  # Retry — scan again
+
+        # Fall through to manual path input
 
     # Manual path input
     path = ask_file(
