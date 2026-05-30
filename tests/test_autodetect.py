@@ -4,6 +4,7 @@ Tests cover:
 - detect_courses: finding available course sheets
 - detect_groups: finding group codes in a course sheet
 - detect_subgroups: detecting subgroup markers
+- detect_module_info: detecting module number and period
 - suggest_academic_year: year suggestion logic
 """
 
@@ -19,6 +20,7 @@ import pytest
 from hse_schedule_parser.autodetect import (
     detect_courses,
     detect_groups,
+    detect_module_info,
     detect_subgroups,
     suggest_academic_year,
 )
@@ -72,6 +74,28 @@ def workbook_no_courses() -> openpyxl.Workbook:
 
 
 @pytest.fixture
+def workbook_with_module_info() -> openpyxl.Workbook:
+    """Create a workbook with module info in cell A1."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet(title="1 курс")
+    ws.cell(row=1, column=1, value="1 модуль (02.09 – 27.10)")
+    ws.cell(row=10, column=1, value="25ФПЛ1")
+    return wb
+
+
+@pytest.fixture
+def workbook_without_module_info() -> openpyxl.Workbook:
+    """Create a workbook without module info in cell A1."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet(title="1 курс")
+    ws.cell(row=1, column=1, value="Расписание 1 курс")
+    ws.cell(row=10, column=1, value="25ФПЛ1")
+    return wb
+
+
+@pytest.fixture
 def temp_xlsx(workbook_with_courses) -> Path:
     """Save a workbook to a temp file and return the path."""
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
@@ -97,6 +121,26 @@ def temp_xlsx_no_courses(workbook_no_courses) -> Path:
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
         path = Path(f.name)
     workbook_no_courses.save(str(path))
+    yield path
+    path.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def temp_xlsx_module(workbook_with_module_info) -> Path:
+    """Save a workbook with module info to a temp file."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+        path = Path(f.name)
+    workbook_with_module_info.save(str(path))
+    yield path
+    path.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def temp_xlsx_no_module(workbook_without_module_info) -> Path:
+    """Save a workbook without module info to a temp file."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+        path = Path(f.name)
+    workbook_without_module_info.save(str(path))
     yield path
     path.unlink(missing_ok=True)
 
@@ -163,6 +207,38 @@ class TestDetectCourses:
         finally:
             path.unlink(missing_ok=True)
 
+    def test_returns_sorted_courses(self) -> None:
+        """Should return courses in sorted order."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet(title="3 курс")
+        wb.create_sheet(title="1 курс")
+        wb.create_sheet(title="2 курс")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            courses = detect_courses(path)
+            assert courses == [1, 2, 3]
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_ignores_non_course_sheets(self) -> None:
+        """Should ignore sheets that don't match course pattern."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet(title="1 курс")
+        wb.create_sheet(title="Лист1")
+        wb.create_sheet(title="Данные")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            courses = detect_courses(path)
+            assert courses == [1]
+        finally:
+            path.unlink(missing_ok=True)
+
 
 # ── detect_groups ───────────────────────────────────────────────────────
 
@@ -203,6 +279,54 @@ class TestDetectGroups:
         finally:
             path.unlink(missing_ok=True)
 
+    def test_returns_empty_for_empty_sheet(self) -> None:
+        """Should return empty list when sheet has no data."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        wb.create_sheet(title="1 курс")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            groups = detect_groups(path, 1)
+            assert groups == []
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_detects_groups_in_row_10_only(self) -> None:
+        """Should only look at row 10 for group codes."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=9, column=1, value="NOT_GROUP")
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        ws.cell(row=11, column=1, value="NOT_GROUP2")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            groups = detect_groups(path, 1)
+            assert groups == ["25ФПЛ1"]
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_filters_non_group_codes(self) -> None:
+        """Should filter out cells that don't look like group codes."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        ws.cell(row=10, column=2, value="NOT_A_GROUP")
+        ws.cell(row=10, column=3, value="")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            groups = detect_groups(path, 1)
+            assert groups == ["25ФПЛ1"]
+        finally:
+            path.unlink(missing_ok=True)
+
 
 # ── detect_subgroups ────────────────────────────────────────────────────
 
@@ -230,6 +354,118 @@ class TestDetectSubgroups:
         """Should return empty list for unknown group prefix."""
         subgroups = detect_subgroups(temp_xlsx, "99XXXX")
         assert subgroups == []
+
+    def test_detects_subgroups_with_group_variant(self) -> None:
+        """Should detect subgroups with 'гр. 1' format."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        ws.cell(row=12, column=1, value="Физика (гр. 1)")
+        ws.cell(row=13, column=1, value="Физика (гр. 2)")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            subgroups = detect_subgroups(path, "25ФПЛ1")
+            assert 1 in subgroups
+            assert 2 in subgroups
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_handles_corrupted_file(self) -> None:
+        """Should return empty list for corrupted file."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            f.write(b"corrupted")
+            path = Path(f.name)
+        try:
+            subgroups = detect_subgroups(path, "25ФПЛ1")
+            assert subgroups == []
+        finally:
+            path.unlink(missing_ok=True)
+
+
+# ── detect_module_info ──────────────────────────────────────────────────
+
+
+class TestDetectModuleInfo:
+    """Tests for detect_module_info()."""
+
+    def test_returns_none_without_module_info(self, temp_xlsx_no_module: Path) -> None:
+        """Should return None when no module info in cell A1."""
+        info = detect_module_info(temp_xlsx_no_module, 1)
+        assert info is None
+
+    def test_returns_none_for_missing_file(self) -> None:
+        """Should return None for non-existent file."""
+        info = detect_module_info("/nonexistent/file.xlsx", 1)
+        assert info is None
+
+    def test_returns_none_for_nonexistent_course(self, temp_xlsx_module: Path) -> None:
+        """Should return None for course not in file."""
+        info = detect_module_info(temp_xlsx_module, 5)
+        assert info is None
+
+    def test_detects_second_module(self) -> None:
+        """Should detect module 2."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=1, column=1, value="2 модуль (11.11 – 29.12)")
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            info = detect_module_info(path, 1)
+            assert info is not None
+            assert info["module"] == 2
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_detects_module_with_different_date_format(self) -> None:
+        """Should detect module with different date separator."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=1, column=1, value="3 модуль (10.01-23.03)")
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            info = detect_module_info(path, 1)
+            assert info is not None
+            assert info["module"] == 3
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_handles_corrupted_file(self) -> None:
+        """Should return None for corrupted file."""
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            f.write(b"corrupted")
+            path = Path(f.name)
+        try:
+            info = detect_module_info(path, 1)
+            assert info is None
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_returns_none_for_empty_cell_a1(self) -> None:
+        """Should return None when cell A1 is empty."""
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        ws = wb.create_sheet(title="1 курс")
+        ws.cell(row=1, column=1, value=None)
+        ws.cell(row=10, column=1, value="25ФПЛ1")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = Path(f.name)
+        wb.save(str(path))
+        try:
+            info = detect_module_info(path, 1)
+            assert info is None
+        finally:
+            path.unlink(missing_ok=True)
 
 
 # ── suggest_academic_year ───────────────────────────────────────────────
@@ -261,3 +497,33 @@ class TestSuggestAcademicYear:
         """Should suggest current year in December."""
         mock_date.today.return_value = type("Date", (), {"month": 12, "year": 2025})()
         assert suggest_academic_year() == 2025
+
+    @patch("datetime.date")
+    def test_suggests_current_year_in_august(self, mock_date: MagicMock) -> None:
+        """Should suggest previous year in August (month < 9)."""
+        mock_date.today.return_value = type("Date", (), {"month": 8, "year": 2025})()
+        assert suggest_academic_year() == 2024
+
+    @patch("datetime.date")
+    def test_suggests_current_year_in_june(self, mock_date: MagicMock) -> None:
+        """Should suggest previous year in June."""
+        mock_date.today.return_value = type("Date", (), {"month": 6, "year": 2025})()
+        assert suggest_academic_year() == 2024
+
+    @patch("datetime.date")
+    def test_suggests_current_year_in_october(self, mock_date: MagicMock) -> None:
+        """Should suggest current year in October."""
+        mock_date.today.return_value = type("Date", (), {"month": 10, "year": 2025})()
+        assert suggest_academic_year() == 2025
+
+    @patch("datetime.date")
+    def test_edge_year_2024(self, mock_date: MagicMock) -> None:
+        """Should work with year 2024."""
+        mock_date.today.return_value = type("Date", (), {"month": 9, "year": 2024})()
+        assert suggest_academic_year() == 2024
+
+    @patch("datetime.date")
+    def test_edge_year_2030(self, mock_date: MagicMock) -> None:
+        """Should work with year 2030."""
+        mock_date.today.return_value = type("Date", (), {"month": 3, "year": 2030})()
+        assert suggest_academic_year() == 2029

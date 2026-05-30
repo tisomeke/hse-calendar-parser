@@ -23,10 +23,8 @@ from hse_schedule_parser.autodetect import (
 from hse_schedule_parser.presets import UserPresets, load_presets, save_presets
 from hse_schedule_parser.tui import (
     ask_choice,
-    ask_confirm,
     ask_file,
     ask_path,
-    ask_text,
     ask_toggles,
     console,
     show_banner,
@@ -111,9 +109,13 @@ def step_file(state: WizardState) -> WizardState | None:
     Scans the project root for .xlsx files. If found, offers a choice:
       1 — use the found file
       2 — specify full path manually
+      ← — go back (exit wizard)
+      ✕ — exit
     If no .xlsx is found in root, shows an error and offers:
       1 — check again (after user placed the file)
       2 — specify full path manually
+      ← — go back (exit wizard)
+      ✕ — exit
     """
     found = _find_excel_in_root()
 
@@ -130,10 +132,14 @@ def step_file(state: WizardState) -> WizardState | None:
             choices=[
                 f"1 — продолжить с найденным файлом: {found[0].name}",
                 "2 — указать полный путь к таблице с расписанием",
+                "← Назад",
+                "✕ Выход",
             ],
             default=f"1 — продолжить с найденным файлом: {found[0].name}",
         )
-        if choice is None:
+        if choice is None or choice == "✕ Выход":
+            return None
+        if choice == "← Назад":
             return None
 
         if choice.startswith("1"):
@@ -152,10 +158,11 @@ def step_file(state: WizardState) -> WizardState | None:
             choices=[
                 "1 — я переместил(а) файл, проверить снова",
                 "2 — указать полный путь к таблице с расписанием",
+                "✕ Выход",
             ],
             default="1 — я переместил(а) файл, проверить снова",
         )
-        if choice is None:
+        if choice is None or choice == "✕ Выход":
             return None
 
         if choice.startswith("1"):
@@ -217,13 +224,15 @@ def step_group(state: WizardState) -> WizardState | None:
         state.course = courses[0]
         console.print(f"[dim]→ Обнаружен курс: {state.course}[/dim]")
     else:
-        course_choices = [f"{c} курс" for c in courses]
+        course_choices = [f"{c} курс" for c in courses] + ["← Назад", "✕ Выход"]
         selected = ask_choice(
             "🎓 Выбери курс:",
             choices=course_choices,
             default=f"{state.course} курс" if state.course else course_choices[0],
         )
-        if selected is None:
+        if selected is None or selected == "✕ Выход":
+            return None
+        if selected == "← Назад":
             return None
         # Parse course number from "N курс"
         state.course = int(selected.split()[0])
@@ -242,12 +251,15 @@ def step_group(state: WizardState) -> WizardState | None:
     # If we have a last group and it's in the list, pre-select it
     default_group = state.group_code if state.group_code in groups else groups[0]
 
+    group_choices = groups + ["← Назад", "✕ Выход"]
     selected_group = ask_choice(
         f"👥 Выбери группу ({state.course} курс):",
-        choices=groups,
+        choices=group_choices,
         default=default_group,
     )
-    if selected_group is None:
+    if selected_group is None or selected_group == "✕ Выход":
+        return None
+    if selected_group == "← Назад":
         return None
 
     state.group_code = selected_group
@@ -274,13 +286,16 @@ def step_subgroup(state: WizardState) -> WizardState | None:
     choices = ["Все подгруппы (без фильтра)"]
     for sg in subgroups:
         choices.append(f"Подгруппа {sg}")
+    choices += ["← Назад", "✕ Выход"]
 
     selected = ask_choice(
         f"🔢 В расписании обнаружены подгруппы. Выбери фильтр:",
         choices=choices,
         default="Все подгруппы (без фильтра)",
     )
-    if selected is None:
+    if selected is None or selected == "✕ Выход":
+        return None
+    if selected == "← Назад":
         return None
 
     if selected == "Все подгруппы (без фильтра)":
@@ -302,12 +317,14 @@ def step_settings(state: WizardState) -> WizardState | None:
     - Skip MINOR disciplines
     - Skip English language
     - Skip Physical Education
-    - Academic year
+
+    Academic year is auto-detected from the current date.
     """
     show_info(
         "Настройки фильтрации.\n"
         "Отметь галочками то, что нужно пропустить (исключить из календаря).\n"
-        "По умолчанию MINOR, английский и физра пропускаются."
+        "По умолчанию MINOR, английский и физра пропускаются.\n"
+        f"Учебный год: {state.academic_year}/{state.academic_year + 1} (определён автоматически)"
     )
 
     # Toggle skip flags
@@ -328,19 +345,6 @@ def step_settings(state: WizardState) -> WizardState | None:
     state.skip_english = result.get("Пропускать английский язык", True)
     state.skip_pe = result.get("Пропускать физкультуру", True)
 
-    # Academic year
-    year_str = ask_text(
-        "📅 Учебный год (начальный год, например 2025 для 2025/2026):",
-        default=str(state.academic_year),
-        validate=lambda v: (
-            v.isdigit() and len(v) == 4 and 2020 <= int(v) <= 2035
-        ) or "Введи год в формате YYYY (например, 2025)",
-    )
-    if year_str is None:
-        return None
-
-    state.academic_year = int(year_str)
-
     return state
 
 
@@ -348,35 +352,44 @@ def step_settings(state: WizardState) -> WizardState | None:
 
 
 def step_output(state: WizardState) -> WizardState | None:
-    """Step 5: Choose output mode — save to file or preview only.
+    """Step 5: Choose output — save to cwd/ or specify custom path.
 
-    If save, ask for output path.
+    Default: save to ./schedule_<group>.ics in the working directory.
     """
+    default_name = f"schedule_{state.group_code}.ics"
+    default_path = str(Path.cwd() / default_name)
+
     show_info(
         "Файл готов к обработке.\n"
-        "Можно сохранить .ics календарь или просто посмотреть отчёт."
+        f"По умолчанию календарь сохранится в:\n"
+        f"  {default_path}\n\n"
+        "Выбери действие:"
     )
 
-    # Preview or save?
-    preview = ask_confirm(
-        "👀 Просто показать отчёт (без сохранения файла)?",
-        default=False,
+    choice = ask_choice(
+        "💾 Сохранение календаря:",
+        choices=[
+            f"1 — сохранить в текущую директорию ({default_name})",
+            "2 — указать другой путь для сохранения",
+            "← Назад",
+            "✕ Выход",
+        ],
+        default=f"1 — сохранить в текущую директорию ({default_name})",
     )
-    if preview is None:
+    if choice is None or choice == "✕ Выход":
+        return None
+    if choice == "← Назад":
         return None
 
-    if preview:
-        state.preview_only = True
-        state.output_path = ""
+    if choice.startswith("1"):
+        state.output_path = default_path
+        state.preview_only = False
         return state
 
-    # Ask for save path
-    default_name = f"schedule_{state.group_code}.ics"
+    # Custom path
     path = ask_path(
-        "💾 Куда сохранить .ics файл?",
-        default=str(Path(state.output_path).parent / default_name)
-        if state.output_path
-        else str(Path.home() / "Downloads" / default_name),
+        "💾 Укажи путь для сохранения .ics файла:",
+        default=default_path,
     )
     if path is None:
         return None

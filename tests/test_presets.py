@@ -6,6 +6,7 @@ Tests cover:
 - save_presets to disk
 - update_presets convenience function
 - Config directory resolution per platform
+- Edge cases: empty JSON, missing fields, type coercion
 """
 
 from __future__ import annotations
@@ -85,6 +86,21 @@ class TestUserPresets:
         assert p.last_output_dir == "/home/user/Downloads"
         assert p.last_academic_year == 2025
 
+    def test_subgroup_none_by_default(self) -> None:
+        """Should have subgroup as None by default."""
+        p = UserPresets()
+        assert p.last_subgroup is None
+
+    def test_subgroup_zero_is_valid(self) -> None:
+        """Should accept subgroup=0 as a valid value."""
+        p = UserPresets(last_subgroup=0)
+        assert p.last_subgroup == 0
+
+    def test_academic_year_zero_by_default(self) -> None:
+        """Should have academic_year as 0 by default."""
+        p = UserPresets()
+        assert p.last_academic_year == 0
+
 
 # ── Config directory ────────────────────────────────────────────────────
 
@@ -118,6 +134,13 @@ class TestGetConfigDir:
         path = _get_presets_path()
         assert path.name == "presets.json"
 
+    @patch("hse_schedule_parser.presets.platform.system")
+    def test_unknown_os_falls_back_to_linux(self, mock_system) -> None:
+        """Should fall back to Linux-style config dir for unknown OS."""
+        mock_system.return_value = "FreeBSD"
+        config_dir = _get_config_dir()
+        assert str(config_dir).endswith(".config/hse-schedule-parser")
+
 
 # ── Save and Load ───────────────────────────────────────────────────────
 
@@ -128,7 +151,6 @@ class TestSaveLoadPresets:
     @pytest.fixture(autouse=True)
     def temp_config_dir(self, tmp_path: Path) -> None:
         """Override config dir to a temp directory for each test."""
-        self._orig_get_config_dir = _get_config_dir.__module__
         patcher = patch(
             "hse_schedule_parser.presets._get_config_dir",
             return_value=tmp_path / ".config" / "hse-schedule-parser",
@@ -210,6 +232,56 @@ class TestSaveLoadPresets:
             result = save_presets(UserPresets())
             assert result is False
 
+    def test_load_handles_empty_json_object(self) -> None:
+        """Should return defaults for empty JSON object."""
+        path = _get_presets_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+        presets = load_presets()
+        assert presets.is_empty() is True
+
+    def test_load_handles_null_values(self) -> None:
+        """Should handle null values in JSON gracefully."""
+        path = _get_presets_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "last_file_path": None,
+            "last_group_code": None,
+            "skip_minor": None,
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        presets = load_presets()
+        # None values are passed through to the dataclass constructor
+        assert presets.last_file_path is None
+        assert presets.last_group_code is None
+        # skip_minor default is True, but None overrides it
+        assert presets.skip_minor is None
+
+    def test_save_overwrites_existing(self) -> None:
+        """Should overwrite existing presets file."""
+        presets1 = UserPresets(last_file_path="/first.xlsx")
+        save_presets(presets1)
+
+        presets2 = UserPresets(last_file_path="/second.xlsx")
+        save_presets(presets2)
+
+        loaded = load_presets()
+        assert loaded.last_file_path == "/second.xlsx"
+
+    def test_load_handles_partial_data(self) -> None:
+        """Should merge partial data with defaults."""
+        path = _get_presets_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {"last_file_path": "/partial.xlsx"}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        loaded = load_presets()
+        assert loaded.last_file_path == "/partial.xlsx"
+        assert loaded.last_group_code == ""  # default
+        assert loaded.skip_minor is True  # default
+
 
 # ── update_presets ──────────────────────────────────────────────────────
 
@@ -255,3 +327,16 @@ class TestUpdatePresets:
         )
         assert updated.last_file_path == "/test.xlsx"
         assert not hasattr(updated, "nonexistent_field")
+
+    def test_update_preserves_existing_values(self) -> None:
+        """Should preserve existing values when updating only some fields."""
+        update_presets(last_file_path="/existing.xlsx", last_group_code="25ФПЛ1")
+
+        updated = update_presets(last_file_path="/updated.xlsx")
+        assert updated.last_file_path == "/updated.xlsx"
+        assert updated.last_group_code == "25ФПЛ1"  # preserved
+
+    def test_update_with_no_args_returns_defaults(self) -> None:
+        """Should return defaults when no args given and no file exists."""
+        updated = update_presets()
+        assert updated.is_empty() is True
