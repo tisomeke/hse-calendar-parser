@@ -1,7 +1,8 @@
 """5-step wizard for the HSE Schedule Parser TUI.
 
 Implements a state machine with WizardState dataclass and step functions.
-Each step returns an updated WizardState or None (go back / exit).
+Each step returns a StepResult: STATE(state) to continue, BACK to go to
+the previous step, or EXIT to quit the wizard.
 """
 
 from __future__ import annotations
@@ -39,7 +40,37 @@ from hse_schedule_parser.tui import (
 logger = logging.getLogger(__name__)
 
 
-# ── Wizard State ────────────────────────────────────────────────────────
+# ── Step Result ─────────────────────────────────────────────────────────
+
+
+from enum import Enum, auto
+
+
+class StepAction(Enum):
+    """Action to take after a step completes."""
+    STATE = auto()  # Continue with updated state
+    BACK = auto()   # Go to previous step
+    EXIT = auto()   # Exit wizard
+
+
+class StepResult:
+    """Result of a wizard step: either a state, back, or exit."""
+
+    def __init__(self, action: StepAction, state: WizardState | None = None) -> None:
+        self.action = action
+        self.state = state
+
+    @classmethod
+    def state(cls, state: WizardState) -> StepResult:
+        return cls(StepAction.STATE, state)
+
+    @classmethod
+    def back(cls) -> StepResult:
+        return cls(StepAction.BACK)
+
+    @classmethod
+    def exit(cls) -> StepResult:
+        return cls(StepAction.EXIT)
 
 
 class WizardExit(Exception):
@@ -103,18 +134,17 @@ def _find_excel_in_root() -> list[Path]:
     return sorted(root.glob("*.xlsx"))
 
 
-def step_file(state: WizardState) -> WizardState | None:
+def step_file(state: WizardState) -> StepResult:
     """Step 1: Select the Excel file with the schedule.
 
     Scans the project root for .xlsx files. If found, offers a choice:
       1 — use the found file
       2 — specify full path manually
-      ← — go back (exit wizard)
+      ← — go back
       ✕ — exit
     If no .xlsx is found in root, shows an error and offers:
       1 — check again (after user placed the file)
       2 — specify full path manually
-      ← — go back (exit wizard)
       ✕ — exit
     """
     found = _find_excel_in_root()
@@ -138,13 +168,13 @@ def step_file(state: WizardState) -> WizardState | None:
             default=f"1 — продолжить с найденным файлом: {found[0].name}",
         )
         if choice is None or choice == "✕ Выход":
-            return None
+            return StepResult.exit()
         if choice == "← Назад":
-            return None
+            return StepResult.back()
 
         if choice.startswith("1"):
             state.file_path = str(found[0].resolve())
-            return state
+            return StepResult.state(state)
 
         # Fall through to manual path input
     else:
@@ -163,7 +193,7 @@ def step_file(state: WizardState) -> WizardState | None:
             default="1 — я переместил(а) файл, проверить снова",
         )
         if choice is None or choice == "✕ Выход":
-            return None
+            return StepResult.exit()
 
         if choice.startswith("1"):
             return step_file(state)  # Retry — scan again
@@ -176,7 +206,7 @@ def step_file(state: WizardState) -> WizardState | None:
         default=state.file_path or "",
     )
     if path is None:
-        return None
+        return StepResult.exit()
 
     path = path.strip()
     if not path:
@@ -193,13 +223,13 @@ def step_file(state: WizardState) -> WizardState | None:
         return step_file(state)  # Retry
 
     state.file_path = path
-    return state
+    return StepResult.state(state)
 
 
 # ── Step 2: Group Selection ─────────────────────────────────────────────
 
 
-def step_group(state: WizardState) -> WizardState | None:
+def step_group(state: WizardState) -> StepResult:
     """Step 2: Detect courses and groups, let user select.
 
     First detects available courses from the file, then groups for the
@@ -215,7 +245,7 @@ def step_group(state: WizardState) -> WizardState | None:
             "Убедись, что файл содержит листы с названиями "
             "'1 курс', '2 курс' и т.д.",
         )
-        return None
+        return StepResult.back()
 
     state._available_courses = courses
 
@@ -231,9 +261,9 @@ def step_group(state: WizardState) -> WizardState | None:
             default=f"{state.course} курс" if state.course else course_choices[0],
         )
         if selected is None or selected == "✕ Выход":
-            return None
+            return StepResult.exit()
         if selected == "← Назад":
-            return None
+            return StepResult.back()
         # Parse course number from "N курс"
         state.course = int(selected.split()[0])
 
@@ -244,7 +274,7 @@ def step_group(state: WizardState) -> WizardState | None:
             f"Не найдено групп для {state.course} курса.",
             "Возможно, файл имеет нестандартный формат.",
         )
-        return None
+        return StepResult.back()
 
     state._available_groups = groups
 
@@ -258,18 +288,18 @@ def step_group(state: WizardState) -> WizardState | None:
         default=default_group,
     )
     if selected_group is None or selected_group == "✕ Выход":
-        return None
+        return StepResult.exit()
     if selected_group == "← Назад":
-        return None
+        return StepResult.back()
 
     state.group_code = selected_group
-    return state
+    return StepResult.state(state)
 
 
 # ── Step 3: Subgroup Filter ─────────────────────────────────────────────
 
 
-def step_subgroup(state: WizardState) -> WizardState | None:
+def step_subgroup(state: WizardState) -> StepResult:
     """Step 3: Detect and optionally filter by subgroup.
 
     If the group has no subgroup split, skip this step.
@@ -280,7 +310,7 @@ def step_subgroup(state: WizardState) -> WizardState | None:
     if not subgroups:
         # No subgroups detected — skip
         state.subgroup = None
-        return state
+        return StepResult.state(state)
 
     # Build choices
     choices = ["Все подгруппы (без фильтра)"]
@@ -294,9 +324,9 @@ def step_subgroup(state: WizardState) -> WizardState | None:
         default="Все подгруппы (без фильтра)",
     )
     if selected is None or selected == "✕ Выход":
-        return None
+        return StepResult.exit()
     if selected == "← Назад":
-        return None
+        return StepResult.back()
 
     if selected == "Все подгруппы (без фильтра)":
         state.subgroup = None
@@ -304,13 +334,13 @@ def step_subgroup(state: WizardState) -> WizardState | None:
         # Parse "Подгруппа N"
         state.subgroup = int(selected.split()[-1])
 
-    return state
+    return StepResult.state(state)
 
 
 # ── Step 4: Settings ────────────────────────────────────────────────────
 
 
-def step_settings(state: WizardState) -> WizardState | None:
+def step_settings(state: WizardState) -> StepResult:
     """Step 4: Toggle skip flags and configure settings.
 
     Shows checkboxes for:
@@ -339,19 +369,19 @@ def step_settings(state: WizardState) -> WizardState | None:
         toggles=toggles,
     )
     if result is None:
-        return None
+        return StepResult.back()
 
     state.skip_minor = result.get("Пропускать MINOR", True)
     state.skip_english = result.get("Пропускать английский язык", True)
     state.skip_pe = result.get("Пропускать физкультуру", True)
 
-    return state
+    return StepResult.state(state)
 
 
 # ── Step 5: Output ──────────────────────────────────────────────────────
 
 
-def step_output(state: WizardState) -> WizardState | None:
+def step_output(state: WizardState) -> StepResult:
     """Step 5: Choose output — save to cwd/ or specify custom path.
 
     Default: save to ./schedule_<group>.ics in the working directory.
@@ -377,14 +407,14 @@ def step_output(state: WizardState) -> WizardState | None:
         default=f"1 — сохранить в текущую директорию ({default_name})",
     )
     if choice is None or choice == "✕ Выход":
-        return None
+        return StepResult.exit()
     if choice == "← Назад":
-        return None
+        return StepResult.back()
 
     if choice.startswith("1"):
         state.output_path = default_path
         state.preview_only = False
-        return state
+        return StepResult.state(state)
 
     # Custom path
     path = ask_path(
@@ -392,11 +422,11 @@ def step_output(state: WizardState) -> WizardState | None:
         default=default_path,
     )
     if path is None:
-        return None
+        return StepResult.exit()
 
     state.output_path = path
     state.preview_only = False
-    return state
+    return StepResult.state(state)
 
 
 # ── Execution ───────────────────────────────────────────────────────────
@@ -488,7 +518,10 @@ def run_wizard() -> None:
 
 
 def _run_wizard_impl() -> None:
-    """Internal wizard implementation with step-by-step flow."""
+    """Internal wizard implementation with step-by-step flow.
+
+    Uses a loop with step index tracking to support back navigation.
+    """
     # Load presets
     presets = load_presets()
 
@@ -498,40 +531,23 @@ def _run_wizard_impl() -> None:
     # Initialize state
     state = WizardState(presets=presets)
 
-    # ── Step 1: File ──
-    result = step_file(state)
-    if result is None:
-        show_goodbye()
-        return
-    state = result
+    # Define steps in order
+    steps = [step_file, step_group, step_subgroup, step_settings, step_output]
+    current_step = 0
 
-    # ── Step 2: Group ──
-    result = step_group(state)
-    if result is None:
-        show_goodbye()
-        return
-    state = result
-
-    # ── Step 3: Subgroup ──
-    result = step_subgroup(state)
-    if result is None:
-        show_goodbye()
-        return
-    state = result
-
-    # ── Step 4: Settings ──
-    result = step_settings(state)
-    if result is None:
-        show_goodbye()
-        return
-    state = result
-
-    # ── Step 5: Output ──
-    result = step_output(state)
-    if result is None:
-        show_goodbye()
-        return
-    state = result
+    while 0 <= current_step < len(steps):
+        result = steps[current_step](state)
+        if result.action == StepAction.EXIT:
+            show_goodbye()
+            return
+        elif result.action == StepAction.BACK:
+            current_step -= 1
+            if current_step < 0:
+                show_goodbye()
+                return
+        else:  # STATE
+            state = result.state
+            current_step += 1
 
     # ── Execute ──
     _execute_parse(state)

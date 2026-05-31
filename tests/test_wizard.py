@@ -18,6 +18,8 @@ import pytest
 
 from hse_schedule_parser.presets import UserPresets
 from hse_schedule_parser.wizard import (
+    StepAction,
+    StepResult,
     WizardState,
     _build_config,
     _find_excel_in_root,
@@ -262,8 +264,9 @@ class TestStepFile:
             mock_choice.return_value = "1 — продолжить с найденным файлом: schedule.xlsx"
             result = step_file(state)
 
-        assert result is not None
-        assert result.file_path.endswith("schedule.xlsx")
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.file_path.endswith("schedule.xlsx")
 
     def test_manual_path_input(self, tmp_path: Path) -> None:
         """Should accept manual path when option 2 chosen."""
@@ -282,11 +285,12 @@ class TestStepFile:
             mock_file.return_value = str(xlsx)
             result = step_file(state)
 
-        assert result is not None
-        assert result.file_path == str(xlsx)
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.file_path == str(xlsx)
 
     def test_exit_on_cancel(self, tmp_path: Path) -> None:
-        """Should return None when user cancels."""
+        """Should return EXIT when user cancels."""
         state = WizardState()
 
         with (
@@ -297,7 +301,25 @@ class TestStepFile:
             mock_choice.return_value = "✕ Выход"
             result = step_file(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
+
+    def test_back_on_back(self, tmp_path: Path) -> None:
+        """Should return BACK when user selects back."""
+        # Create a file so we hit the "files found" branch (which has "← Назад")
+        xlsx = tmp_path / "schedule.xlsx"
+        xlsx.write_text("dummy")
+
+        state = WizardState()
+
+        with (
+            patch("hse_schedule_parser.wizard.Path.cwd", return_value=tmp_path),
+            patch("hse_schedule_parser.wizard.ask_choice") as mock_choice,
+            patch("hse_schedule_parser.wizard.show_info"),
+        ):
+            mock_choice.return_value = "← Назад"
+            result = step_file(state)
+
+        assert result.action == StepAction.BACK
 
     def test_no_files_found_shows_error(self, tmp_path: Path) -> None:
         """Should show error when no .xlsx files in root."""
@@ -312,7 +334,7 @@ class TestStepFile:
             mock_choice.return_value = "✕ Выход"
             result = step_file(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
         mock_error.assert_called_once()
 
 
@@ -337,9 +359,10 @@ class TestStepGroup:
             mock_choice.return_value = "25ФПЛ1"
             result = step_group(state)
 
-        assert result is not None
-        assert result.course == 1
-        assert result.group_code == "25ФПЛ1"
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.course == 1
+        assert result.state.group_code == "25ФПЛ1"
 
     def test_asks_for_course_when_multiple(self) -> None:
         """Should ask user to select course when multiple detected."""
@@ -356,11 +379,12 @@ class TestStepGroup:
             mock_choice.side_effect = ["2 курс", "25ФПЛ1"]
             result = step_group(state)
 
-        assert result is not None
-        assert result.course == 2
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.course == 2
 
-    def test_returns_none_when_no_courses(self) -> None:
-        """Should return None when no courses detected."""
+    def test_returns_back_when_no_courses(self) -> None:
+        """Should return BACK when no courses detected."""
         state = WizardState()
         state.file_path = "/test/file.xlsx"
 
@@ -371,10 +395,10 @@ class TestStepGroup:
         ):
             result = step_group(state)
 
-        assert result is None
+        assert result.action == StepAction.BACK
 
-    def test_returns_none_when_no_groups(self) -> None:
-        """Should return None when no groups detected."""
+    def test_returns_back_when_no_groups(self) -> None:
+        """Should return BACK when no groups detected."""
         state = WizardState()
         state.file_path = "/test/file.xlsx"
 
@@ -387,7 +411,7 @@ class TestStepGroup:
         ):
             result = step_group(state)
 
-        assert result is None
+        assert result.action == StepAction.BACK
 
     def test_exit_on_course_selection(self) -> None:
         """Should exit when user chooses exit in course selection."""
@@ -403,7 +427,23 @@ class TestStepGroup:
             mock_choice.return_value = "✕ Выход"
             result = step_group(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
+
+    def test_back_on_course_selection(self) -> None:
+        """Should go back when user chooses back in course selection."""
+        state = WizardState()
+        state.file_path = "/test/file.xlsx"
+
+        with (
+            patch("hse_schedule_parser.wizard.detect_courses", return_value=[1, 2]),
+            patch("hse_schedule_parser.wizard.ask_choice") as mock_choice,
+            patch("hse_schedule_parser.wizard.show_info"),
+            patch("hse_schedule_parser.wizard.console"),
+        ):
+            mock_choice.return_value = "← Назад"
+            result = step_group(state)
+
+        assert result.action == StepAction.BACK
 
     def test_exit_on_group_selection(self) -> None:
         """Should exit when user chooses exit in group selection."""
@@ -420,7 +460,24 @@ class TestStepGroup:
             mock_choice.return_value = "✕ Выход"
             result = step_group(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
+
+    def test_back_on_group_selection(self) -> None:
+        """Should go back when user chooses back in group selection."""
+        state = WizardState()
+        state.file_path = "/test/file.xlsx"
+
+        with (
+            patch("hse_schedule_parser.wizard.detect_courses", return_value=[1]),
+            patch("hse_schedule_parser.wizard.detect_groups", return_value=["25ФПЛ1"]),
+            patch("hse_schedule_parser.wizard.ask_choice") as mock_choice,
+            patch("hse_schedule_parser.wizard.show_info"),
+            patch("hse_schedule_parser.wizard.console"),
+        ):
+            mock_choice.return_value = "← Назад"
+            result = step_group(state)
+
+        assert result.action == StepAction.BACK
 
 
 # ── step_subgroup (mocked) ──────────────────────────────────────────────
@@ -438,8 +495,9 @@ class TestStepSubgroup:
         with patch("hse_schedule_parser.wizard.detect_subgroups", return_value=[]):
             result = step_subgroup(state)
 
-        assert result is not None
-        assert result.subgroup is None
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.subgroup is None
 
     def test_selects_all_subgroups(self) -> None:
         """Should set subgroup=None when 'all' selected."""
@@ -454,8 +512,9 @@ class TestStepSubgroup:
             mock_choice.return_value = "Все подгруппы (без фильтра)"
             result = step_subgroup(state)
 
-        assert result is not None
-        assert result.subgroup is None
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.subgroup is None
 
     def test_selects_specific_subgroup(self) -> None:
         """Should set subgroup number when specific subgroup selected."""
@@ -470,8 +529,9 @@ class TestStepSubgroup:
             mock_choice.return_value = "Подгруппа 2"
             result = step_subgroup(state)
 
-        assert result is not None
-        assert result.subgroup == 2
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.subgroup == 2
 
     def test_exit_on_cancel(self) -> None:
         """Should exit when user cancels."""
@@ -486,7 +546,22 @@ class TestStepSubgroup:
             mock_choice.return_value = "✕ Выход"
             result = step_subgroup(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
+
+    def test_back_on_back(self) -> None:
+        """Should go back when user selects back."""
+        state = WizardState()
+        state.file_path = "/test/file.xlsx"
+        state.group_code = "25ФПЛ1"
+
+        with (
+            patch("hse_schedule_parser.wizard.detect_subgroups", return_value=[1, 2]),
+            patch("hse_schedule_parser.wizard.ask_choice") as mock_choice,
+        ):
+            mock_choice.return_value = "← Назад"
+            result = step_subgroup(state)
+
+        assert result.action == StepAction.BACK
 
 
 # ── step_settings (mocked) ──────────────────────────────────────────────
@@ -513,13 +588,14 @@ class TestStepSettings:
             }
             result = step_settings(state)
 
-        assert result is not None
-        assert result.skip_minor is False
-        assert result.skip_english is True
-        assert result.skip_pe is False
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.skip_minor is False
+        assert result.state.skip_english is True
+        assert result.state.skip_pe is False
 
-    def test_keeps_defaults_on_cancel(self) -> None:
-        """Should return None when user cancels toggles."""
+    def test_returns_back_on_cancel(self) -> None:
+        """Should return BACK when user cancels toggles."""
         state = WizardState()
 
         with (
@@ -529,7 +605,7 @@ class TestStepSettings:
             mock_toggles.return_value = None
             result = step_settings(state)
 
-        assert result is None
+        assert result.action == StepAction.BACK
 
 
 # ── step_output (mocked) ────────────────────────────────────────────────
@@ -550,9 +626,10 @@ class TestStepOutput:
             mock_choice.return_value = "1 — сохранить в текущую директорию (schedule_25ФПЛ1.ics)"
             result = step_output(state)
 
-        assert result is not None
-        assert "schedule_25ФПЛ1.ics" in result.output_path
-        assert result.preview_only is False
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert "schedule_25ФПЛ1.ics" in result.state.output_path
+        assert result.state.preview_only is False
 
     def test_custom_path(self) -> None:
         """Should accept custom path when option 2 chosen."""
@@ -568,9 +645,10 @@ class TestStepOutput:
             mock_path.return_value = "/custom/path/schedule.ics"
             result = step_output(state)
 
-        assert result is not None
-        assert result.output_path == "/custom/path/schedule.ics"
-        assert result.preview_only is False
+        assert result.action == StepAction.STATE
+        assert result.state is not None
+        assert result.state.output_path == "/custom/path/schedule.ics"
+        assert result.state.preview_only is False
 
     def test_exit_on_cancel(self) -> None:
         """Should exit when user cancels."""
@@ -584,7 +662,7 @@ class TestStepOutput:
             mock_choice.return_value = "✕ Выход"
             result = step_output(state)
 
-        assert result is None
+        assert result.action == StepAction.EXIT
 
     def test_back_navigation(self) -> None:
         """Should go back when user selects back."""
@@ -598,7 +676,7 @@ class TestStepOutput:
             mock_choice.return_value = "← Назад"
             result = step_output(state)
 
-        assert result is None
+        assert result.action == StepAction.BACK
 
 
 # ── run_wizard (mocked) ─────────────────────────────────────────────────
@@ -661,17 +739,17 @@ class TestRunWizardImpl:
             patch("builtins.input", return_value=""),
         ):
             state = WizardState()
-            mock_file.return_value = state
-            mock_group.return_value = state
-            mock_subgroup.return_value = state
-            mock_settings.return_value = state
-            mock_output.return_value = state
+            mock_file.return_value = StepResult.state(state)
+            mock_group.return_value = StepResult.state(state)
+            mock_subgroup.return_value = StepResult.state(state)
+            mock_settings.return_value = StepResult.state(state)
+            mock_output.return_value = StepResult.state(state)
 
             from hse_schedule_parser.wizard import _run_wizard_impl
             _run_wizard_impl()
 
     def test_exit_on_step_file(self) -> None:
-        """Should exit gracefully when step_file returns None."""
+        """Should exit gracefully when step_file returns EXIT."""
         with (
             patch("hse_schedule_parser.wizard.load_presets",
                   return_value=UserPresets()),
@@ -679,14 +757,14 @@ class TestRunWizardImpl:
             patch("hse_schedule_parser.wizard.step_file") as mock_file,
             patch("hse_schedule_parser.wizard.show_goodbye") as mock_goodbye,
         ):
-            mock_file.return_value = None
+            mock_file.return_value = StepResult.exit()
 
             from hse_schedule_parser.wizard import _run_wizard_impl
             _run_wizard_impl()
             mock_goodbye.assert_called_once()
 
     def test_exit_on_step_group(self) -> None:
-        """Should exit gracefully when step_group returns None."""
+        """Should exit gracefully when step_group returns EXIT."""
         with (
             patch("hse_schedule_parser.wizard.load_presets",
                   return_value=UserPresets()),
@@ -696,8 +774,64 @@ class TestRunWizardImpl:
             patch("hse_schedule_parser.wizard.show_goodbye") as mock_goodbye,
         ):
             state = WizardState()
-            mock_file.return_value = state
-            mock_group.return_value = None
+            mock_file.return_value = StepResult.state(state)
+            mock_group.return_value = StepResult.exit()
+
+            from hse_schedule_parser.wizard import _run_wizard_impl
+            _run_wizard_impl()
+            mock_goodbye.assert_called_once()
+
+    def test_back_from_step_group_goes_to_step_file(self) -> None:
+        """Should go back to step_file when step_group returns BACK."""
+        with (
+            patch("hse_schedule_parser.wizard.load_presets",
+                  return_value=UserPresets()),
+            patch("hse_schedule_parser.wizard.show_banner"),
+            patch("hse_schedule_parser.wizard.step_file") as mock_file,
+            patch("hse_schedule_parser.wizard.step_group") as mock_group,
+            patch("hse_schedule_parser.wizard.step_subgroup") as mock_subgroup,
+            patch("hse_schedule_parser.wizard.step_settings") as mock_settings,
+            patch("hse_schedule_parser.wizard.step_output") as mock_output,
+            patch("hse_schedule_parser.wizard._execute_parse"),
+            patch("hse_schedule_parser.wizard.save_presets"),
+            patch("hse_schedule_parser.wizard.console"),
+            patch("builtins.input", return_value=""),
+        ):
+            state = WizardState()
+            # step_file returns state, step_group returns BACK (first time),
+            # then step_file is called again and returns state,
+            # then step_group is called again and returns STATE this time,
+            # then the rest proceed normally
+            mock_file.side_effect = [
+                StepResult.state(state),   # first call (step 0)
+                StepResult.state(state),   # second call after back (step 0 again)
+            ]
+            # First call returns BACK, second call returns STATE
+            mock_group.side_effect = [
+                StepResult.back(),          # first call (step 1)
+                StepResult.state(state),    # second call after re-entering step 1
+            ]
+            mock_subgroup.return_value = StepResult.state(state)
+            mock_settings.return_value = StepResult.state(state)
+            mock_output.return_value = StepResult.state(state)
+
+            from hse_schedule_parser.wizard import _run_wizard_impl
+            _run_wizard_impl()
+            # step_file should have been called twice
+            assert mock_file.call_count == 2
+            # step_group should have been called twice
+            assert mock_group.call_count == 2
+
+    def test_back_from_first_step_exits(self) -> None:
+        """Should exit when BACK from step 0 (step_file)."""
+        with (
+            patch("hse_schedule_parser.wizard.load_presets",
+                  return_value=UserPresets()),
+            patch("hse_schedule_parser.wizard.show_banner"),
+            patch("hse_schedule_parser.wizard.step_file") as mock_file,
+            patch("hse_schedule_parser.wizard.show_goodbye") as mock_goodbye,
+        ):
+            mock_file.return_value = StepResult.back()
 
             from hse_schedule_parser.wizard import _run_wizard_impl
             _run_wizard_impl()
