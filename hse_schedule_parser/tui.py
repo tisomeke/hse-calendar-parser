@@ -244,7 +244,7 @@ def ask_file(
 def _validate_file_path(path: str) -> bool | str:
     """Validate that a file path exists and is an .xlsx file."""
     if not path.strip():
-        return "Путь не может быть пустым. Укажи путь к файлу."
+        return "Путь не может быть пустым. Укажите путь к файлу."
     p = Path(path.strip())
     if not p.exists():
         return f"Файл не найден: {path}"
