@@ -32,37 +32,21 @@
 3. Распакуй ZIP на **Рабочий стол**
 4. У тебя появится папка `hse-calendar-parser-main`
 
-#### Шаг 1.3. Открой PowerShell
+#### Шаг 1.3. Открой Командную строку (CMD)
 
-1. Нажми **Win + S** (иконка лупы слева внизу)
-2. Напиши `powershell`
-3. Нажми **Windows PowerShell** — откроется чёрное окно
+1. Нажми **Win + S** (иконка лупы)
+2. Напиши `cmd`
+3. Нажми **Командная строка** — откроется чёрное окно
 
 #### Шаг 1.4. Установи программу
 
-В чёрном окне (где мигает курсор) вводи команды **по очереди**. После каждой — **Enter**.
+В чёрном окне вводи команды **по очереди**. После каждой — **Enter**.
 
-**Команда 1** — перейти на Рабочий стол:
-```powershell
+```cmd
 cd Desktop
-```
-
-**Команда 2** — перейти в папку программы:
-```powershell
 cd hse-calendar-parser-main
-```
-
-**Команда 3** — проверить Python:
-```powershell
-python --version
-```
-> Должно показать `Python 3.13.x`. Если ошибка — вернись к Шагу 1.1, проверь галочку.
-
-**Команда 4** — установить:
-```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e .
+.venv\Scripts\python.exe -m pip install -e .
 ```
 
 Жди. Последняя строка: `Successfully installed ...` — готово! Окно можно закрыть.
@@ -95,22 +79,10 @@ pip install -e .
 
 В окне Терминала вводи команды **по очереди**. После каждой — **Enter**.
 
-**Команда 1** — перейти в папку:
 ```bash
 cd ~/Downloads/hse-calendar-parser-main
-```
-
-**Команда 2** — проверить Python:
-```bash
-python3 --version
-```
-> Должно показать `Python 3.13.x`. Если ошибка — вернись к Шагу 1.1.
-
-**Команда 3** — установить:
-```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+.venv/bin/python3 -m pip install -e .
 ```
 
 Жди. Последняя строка: `Successfully installed ...` — готово! Окно можно закрыть.
@@ -124,13 +96,13 @@ pip install -e .
 ### 🪟 Для Windows
 
 1. Положи файл `.xlsx` с расписанием в папку `hse-calendar-parser-main` на **Рабочем столе**
-2. Открой **PowerShell** (**Win + S** → `powershell` → **Enter**)
-3. Введи три команды:
+2. Открой **CMD** (**Win + S** → `cmd` → **Enter**)
+3. Введи:
 
-```powershell
+```cmd
 cd Desktop
 cd hse-calendar-parser-main
-.venv\Scripts\python -m hse_schedule_parser
+.venv\Scripts\python.exe -m hse_schedule_parser
 ```
 
 ---
@@ -139,7 +111,7 @@ cd hse-calendar-parser-main
 
 1. Положи файл `.xlsx` с расписанием в папку `hse-calendar-parser-main` в **Downloads**
 2. Открой **Терминал** (**Cmd + Пробел** → `terminal` → **Enter**)
-3. Введи две команды:
+3. Введи:
 
 ```bash
 cd ~/Downloads/hse-calendar-parser-main
@@ -194,10 +166,10 @@ cd ~/Downloads/hse-calendar-parser-main
 ## 📝 Шпаргалка
 
 **Windows:**
-```powershell
+```cmd
 cd Desktop
 cd hse-calendar-parser-main
-.venv\Scripts\python -m hse_schedule_parser
+.venv\Scripts\python.exe -m hse_schedule_parser
 ```
 
 **Mac:**
