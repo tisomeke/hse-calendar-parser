@@ -365,7 +365,7 @@ def step_settings(state: WizardState) -> StepResult:
     }
 
     result = ask_toggles(
-        "⚙️ Что пропускать? (Space — переключить, Enter — подтвердить)",
+        "⚙️ Что пропускать?",
         toggles=toggles,
     )
     if result is None:

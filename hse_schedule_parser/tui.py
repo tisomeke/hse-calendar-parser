@@ -46,7 +46,7 @@ def show_banner() -> None:
         border_style="cyan",
         padding=(1, 2),
         title="[bold]Добро пожаловать![/]",
-        subtitle="[dim]Введи /back чтобы вернуться на шаг назад[/]",
+        subtitle="[dim]На каждом шаге доступны: ← Назад • ✕ Выход[/]",
     )
     console.print(panel)
     console.print()
