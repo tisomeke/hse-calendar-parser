@@ -6,11 +6,13 @@ Tests cover:
 - detect_subgroups: detecting subgroup markers
 - detect_module_info: detecting module number and period
 - suggest_academic_year: year suggestion logic
+- parse_calendar_sheet: reading week parity from the 'Календарь' sheet
 """
 
 from __future__ import annotations
 
 import tempfile
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +24,7 @@ from hse_schedule_parser.autodetect import (
     detect_groups,
     detect_module_info,
     detect_subgroups,
+    parse_calendar_sheet,
     suggest_academic_year,
 )
 
@@ -527,3 +530,205 @@ class TestSuggestAcademicYear:
         """Should work with year 2030."""
         mock_date.today.return_value = type("Date", (), {"month": 3, "year": 2030})()
         assert suggest_academic_year() == 2029
+
+
+# ── Fixtures for parse_calendar_sheet ─────────────────────────────────────
+
+
+@pytest.fixture
+def calendar_workbook() -> openpyxl.Workbook:
+    """Create a minimal workbook with a 'Календарь' sheet.
+
+    Structure mimics the real file:
+    - Row 1: title with academic year
+    - Row 3: legend 'верхняя неделя' with peach fill
+    - Row 4: legend 'сессия' with blue fill
+    - Row 5: legend 'каникулы' with green fill
+    - Module I block (rows 7-16): September-October
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Календарь"
+
+    # Title
+    ws.cell(row=1, column=1, value="КАЛЕНДАРЬ НА 2025-2026 учебный год")
+
+    # Legend
+    from openpyxl.styles import PatternFill
+    peach = PatternFill(start_color="FFFFE1CC", end_color="FFFFE1CC", fill_type="solid")
+    blue = PatternFill(start_color="FF8CB5F9", end_color="FF8CB5F9", fill_type="solid")
+    green = PatternFill(start_color="FF1A5529", end_color="FF1A5529", fill_type="solid")
+
+    ws.cell(row=3, column=1, value="верхняя неделя").fill = peach
+    ws.cell(row=4, column=1, value="сессия").fill = blue
+    ws.cell(row=5, column=1, value="каникулы").fill = green
+
+    # Module I header
+    ws.cell(row=7, column=1, value="I модуль")
+    ws.cell(row=8, column=2, value="Дни недели")
+    ws.cell(row=8, column=4, value="Сентябрь")
+    ws.cell(row=8, column=10, value="Октябрь")
+
+    # Day rows for Module I (rows 10-16)
+    # Sept 1 (Mon) = upper, Sept 8 (Mon) = lower, Sept 15 (Mon) = upper
+    # Oct 6 (Tue) = upper, Oct 13 (Tue) = lower
+    days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+    for i, day_name in enumerate(days):
+        row_num = 10 + i
+        ws.cell(row=row_num, column=2, value=day_name)
+        # September dates (cols D-H = 4-8)
+        ws.cell(row=row_num, column=4, value=1 + i)  # Sept 1-7
+        ws.cell(row=row_num, column=5, value=8 + i)  # Sept 8-14
+        ws.cell(row=row_num, column=6, value=15 + i)  # Sept 15-21
+        ws.cell(row=row_num, column=7, value=22 + i)  # Sept 22-28
+        ws.cell(row=row_num, column=8, value=29 + i)  # Sept 29-35 (overflow)
+        # October dates (cols J-N = 10-14)
+        ws.cell(row=row_num, column=10, value=6 + i)  # Oct 6-12
+        ws.cell(row=row_num, column=11, value=13 + i)  # Oct 13-19
+        ws.cell(row=row_num, column=12, value=20 + i)  # Oct 20-26
+        ws.cell(row=row_num, column=13, value=27 + i)  # Oct 27-33 (overflow)
+
+    # Apply peach fill to upper week cells (Sept 1-7, Sept 15-21, Oct 6-12)
+    for i in range(7):
+        # Sept 1-7 (col D)
+        ws.cell(row=10 + i, column=4).fill = peach
+        # Sept 15-21 (col F)
+        ws.cell(row=10 + i, column=6).fill = peach
+        # Oct 6-12 (col J)
+        ws.cell(row=10 + i, column=10).fill = peach
+
+    return wb
+
+
+@pytest.fixture
+def calendar_xlsx(calendar_workbook: openpyxl.Workbook) -> Path:
+    """Save the calendar workbook to a temp file."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+        path = Path(f.name)
+    calendar_workbook.save(str(path))
+    calendar_workbook.close()
+    yield path
+    path.unlink(missing_ok=True)
+
+
+# ── parse_calendar_sheet ──────────────────────────────────────────────────
+
+
+class TestParseCalendarSheet:
+    """Tests for parse_calendar_sheet()."""
+
+    def test_returns_upper_dates(self, calendar_xlsx: Path) -> None:
+        """Should return upper-week dates from the calendar sheet."""
+        result = parse_calendar_sheet(calendar_xlsx)
+        assert result is not None
+        assert isinstance(result, frozenset)
+
+        # Sept 1, 2025 (Monday) — upper (peach)
+        assert date(2025, 9, 1) in result
+        # Sept 2, 2025 (Tuesday) — upper (peach)
+        assert date(2025, 9, 2) in result
+        # Sept 8, 2025 (Monday) — lower (no fill)
+        assert date(2025, 9, 8) not in result
+        # Sept 15, 2025 (Monday) — upper (peach)
+        assert date(2025, 9, 15) in result
+        # Oct 6, 2025 (Monday) — upper (peach)
+        assert date(2025, 10, 6) in result
+        # Oct 13, 2025 (Monday) — lower (no fill)
+        assert date(2025, 10, 13) not in result
+
+    def test_returns_none_for_missing_file(self) -> None:
+        """Should return None for non-existent file."""
+        result = parse_calendar_sheet("/nonexistent/file.xlsx")
+        assert result is None
+
+    def test_returns_none_for_no_calendar_sheet(self, tmp_path: Path) -> None:
+        """Should return None when workbook has no 'Календарь' sheet."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "1 курс"
+        path = tmp_path / "no_calendar.xlsx"
+        wb.save(str(path))
+        wb.close()
+
+        result = parse_calendar_sheet(path)
+        assert result is None
+
+    def test_returns_none_for_corrupted_file(self) -> None:
+        """Should return None for corrupted file."""
+        result = parse_calendar_sheet("/dev/null")
+        assert result is None
+
+    def test_returns_none_for_empty_title(self, tmp_path: Path) -> None:
+        """Should return None when title cell is empty."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Календарь"
+        # No title in A1
+        path = tmp_path / "empty_title.xlsx"
+        wb.save(str(path))
+        wb.close()
+
+        result = parse_calendar_sheet(path)
+        assert result is None
+
+    def test_returns_none_without_legend(self, tmp_path: Path) -> None:
+        """Should return None when legend row is missing."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Календарь"
+        ws.cell(row=1, column=1, value="КАЛЕНДАРЬ НА 2025-2026 учебный год")
+        # No legend rows
+        path = tmp_path / "no_legend.xlsx"
+        wb.save(str(path))
+        wb.close()
+
+        result = parse_calendar_sheet(path)
+        assert result is None
+
+    def test_handles_different_academic_year(self, tmp_path: Path) -> None:
+        """Should handle different academic year in title."""
+        from openpyxl.styles import PatternFill
+        peach = PatternFill(start_color="FFFFE1CC", end_color="FFFFE1CC", fill_type="solid")
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Календарь"
+        ws.cell(row=1, column=1, value="КАЛЕНДАРЬ НА 2024-2025 учебный год")
+        ws.cell(row=3, column=1, value="верхняя неделя").fill = peach
+        ws.cell(row=7, column=1, value="I модуль")
+        ws.cell(row=8, column=4, value="Сентябрь")
+        ws.cell(row=10, column=2, value="понедельник")
+        ws.cell(row=10, column=4, value=1).fill = peach  # Sept 1, 2024
+
+        path = tmp_path / "year_2024.xlsx"
+        wb.save(str(path))
+        wb.close()
+
+        result = parse_calendar_sheet(path)
+        assert result is not None
+        assert date(2024, 9, 1) in result
+
+    def test_handles_january_dates(self, tmp_path: Path) -> None:
+        """Should use ac_year + 1 for January dates."""
+        from openpyxl.styles import PatternFill
+        peach = PatternFill(start_color="FFFFE1CC", end_color="FFFFE1CC", fill_type="solid")
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Календарь"
+        ws.cell(row=1, column=1, value="КАЛЕНДАРЬ НА 2025-2026 учебный год")
+        ws.cell(row=3, column=1, value="верхняя неделя").fill = peach
+        ws.cell(row=29, column=1, value="III модуль")
+        ws.cell(row=30, column=4, value="Январь")
+        ws.cell(row=32, column=2, value="понедельник")
+        ws.cell(row=32, column=5, value=12).fill = peach  # Jan 12, 2026
+
+        path = tmp_path / "january.xlsx"
+        wb.save(str(path))
+        wb.close()
+
+        result = parse_calendar_sheet(path)
+        assert result is not None
+        # January should use ac_year + 1 = 2026
+        assert date(2026, 1, 12) in result
+        assert date(2025, 1, 12) not in result

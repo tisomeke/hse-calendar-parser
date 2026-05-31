@@ -2,6 +2,7 @@
 
 Reads .xlsx files, selects the correct sheet based on group code,
 extracts module period, finds group columns, and iterates schedule rows.
+Also reads the 'Календарь' sheet for week parity information.
 """
 
 from __future__ import annotations
@@ -62,6 +63,8 @@ class ReaderResult:
     module_period_end: str  # e.g. "24.03"
     academic_year_start: int
     rows: list[ScheduleRow] = field(default_factory=list)
+    calendar_upper_dates: frozenset[date] | None = None
+    """Upper-week dates from the 'Календарь' sheet, or None if unavailable."""
 
 
 def find_sheet_name(wb: openpyxl.Workbook, group_code: str) -> str | None:
@@ -198,6 +201,8 @@ def read_schedule(
 ) -> ReaderResult | None:
     """Read schedule data from an Excel file for a specific group.
 
+    Also reads the 'Календарь' sheet for week parity information.
+
     Returns a ReaderResult with all parsed rows, or None if the
     group/sheet cannot be found.
     """
@@ -316,12 +321,21 @@ def read_schedule(
                 )
             )
 
+        # Read calendar sheet for week parity (lazy import to avoid circular deps)
+        calendar_upper_dates: frozenset[date] | None = None
+        try:
+            from hse_schedule_parser.autodetect import parse_calendar_sheet
+            calendar_upper_dates = parse_calendar_sheet(file_path)
+        except Exception:
+            logger.debug("Could not read calendar sheet for week parity")
+
         return ReaderResult(
             module=module,
             module_period_start=period_start,
             module_period_end=period_end,
             academic_year_start=academic_year_start,
             rows=rows,
+            calendar_upper_dates=calendar_upper_dates,
         )
 
     finally:

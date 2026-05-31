@@ -14,6 +14,7 @@ def generate_dates(
     module_period_start: str,
     module_period_end: str,
     year: int,
+    calendar_upper_dates: frozenset[date] | None = None,
 ) -> list[date]:
     """Generate concrete dates for a lesson block.
 
@@ -23,6 +24,9 @@ def generate_dates(
         module_period_start: Module start date string (e.g. '09.01')
         module_period_end: Module end date string (e.g. '24.03')
         year: Calendar year
+        calendar_upper_dates: Upper-week dates from the 'Календарь' sheet.
+            When provided, used for parity filtering instead of relative
+            week-number calculation.
 
     Returns:
         List of concrete dates for this lesson
@@ -47,7 +51,9 @@ def generate_dates(
 
     # 3. Apply week parity filter
     if block.week_parity and result:
-        result = _filter_by_parity(result, block.week_parity)
+        result = _filter_by_parity(
+            result, block.week_parity, calendar_upper_dates
+        )
 
     # 4. Remove cancelled dates
     if block.is_cancelled:
@@ -113,28 +119,44 @@ def _generate_dates_in_range(
 
 
 def _filter_by_parity(
-    dates: list[date], parity: str
+    dates: list[date],
+    parity: str,
+    calendar_upper_dates: frozenset[date] | None = None,
 ) -> list[date]:
     """Filter dates by week parity (upper/lower).
 
+    When calendar_upper_dates is provided (from the 'Календарь' sheet),
+    it is used to determine parity directly: dates in the set are upper,
+    all others are lower.
+
+    Otherwise, falls back to relative week-number calculation:
     Upper week = odd week numbers (1, 3, 5, ...)
     Lower week = even week numbers (2, 4, 6, ...)
-
     Week number is calculated from the first date in the list.
     """
     if not dates:
         return []
 
-    first_date = dates[0]
     result: list[date] = []
 
-    for dt in dates:
-        days_diff = (dt - first_date).days
-        week_number = (days_diff // 7) + 1
+    if calendar_upper_dates is not None:
+        # Use calendar sheet data: dates in upper_dates set are upper week
+        for dt in dates:
+            is_upper = dt in calendar_upper_dates
+            if parity == "upper" and is_upper:
+                result.append(dt)
+            elif parity == "lower" and not is_upper:
+                result.append(dt)
+    else:
+        # Fall back to relative week-number calculation
+        first_date = dates[0]
+        for dt in dates:
+            days_diff = (dt - first_date).days
+            week_number = (days_diff // 7) + 1
 
-        if parity == "upper" and week_number % 2 == 1:
-            result.append(dt)
-        elif parity == "lower" and week_number % 2 == 0:
-            result.append(dt)
+            if parity == "upper" and week_number % 2 == 1:
+                result.append(dt)
+            elif parity == "lower" and week_number % 2 == 0:
+                result.append(dt)
 
     return result

@@ -114,6 +114,7 @@ def run_pipeline(config: ParseConfig) -> ParseResult:
                 reader_result.module_period_start,
                 reader_result.module_period_end,
                 year,
+                calendar_upper_dates=reader_result.calendar_upper_dates,
             )
 
             if not dates:
