@@ -250,7 +250,7 @@ class TestStepFile:
     """Tests for step_file() with mocked UI and filesystem."""
 
     def test_uses_found_file(self, tmp_path: Path) -> None:
-        """Should use the first found .xlsx file when option 1 chosen."""
+        """Should use the found .xlsx file when selected from the list."""
         xlsx = tmp_path / "schedule.xlsx"
         xlsx.write_text("dummy")
 
@@ -261,7 +261,7 @@ class TestStepFile:
             patch("hse_schedule_parser.wizard.ask_choice") as mock_choice,
             patch("hse_schedule_parser.wizard.show_info"),
         ):
-            mock_choice.return_value = "1 — продолжить с найденным файлом: schedule.xlsx"
+            mock_choice.return_value = "schedule.xlsx"
             result = step_file(state)
 
         assert result.action == StepAction.STATE

@@ -48,7 +48,7 @@ def generate_uid(
     date_str = dt.strftime("%Y-%m-%d")
     time_str = start_time.strftime("%H%M")
     hash_input = f"{title}|{teacher}".encode("utf-8")
-    hash_suffix = hashlib.md5(hash_input).hexdigest()[:6]
+    hash_suffix = hashlib.md5(hash_input, usedforsecurity=False).hexdigest()[:6]
     return f"hse-{group}-{date_str}-{time_str}-{hash_suffix}"
 
 

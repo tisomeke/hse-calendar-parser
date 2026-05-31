@@ -21,6 +21,10 @@ class RawLessonBlock:
     recovery_date: date | None = None
     week_parity: Literal["upper", "lower", None] = None
     location_override: dict[date, str] = field(default_factory=dict)
+    period_start: date | None = None
+    """Cell-specific period start (overrides module period when set)."""
+    period_end: date | None = None
+    """Cell-specific period end (overrides module period when set)."""
 
 
 @dataclass

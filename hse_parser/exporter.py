@@ -59,7 +59,12 @@ def _create_event(event: Event) -> ICalEvent:
 
 
 def _create_timezone_component():
-    """Create a VTIMEZONE component for Europe/Moscow."""
+    """Create a VTIMEZONE component for Europe/Moscow.
+
+    Moscow has been at UTC+3 year-round since 2014 (no DST).
+    Both STANDARD and DAYLIGHT components are included for
+    compatibility with calendar applications that expect both.
+    """
     from icalendar import Timezone, TimezoneDaylight, TimezoneStandard
 
     tz = Timezone()
@@ -72,6 +77,15 @@ def _create_timezone_component():
     standard.add("TZOFFSETTO", timedelta(hours=3))
     standard.add("TZNAME", "MSK")
     tz.add_component(standard)
+
+    # Daylight time (same as standard — Moscow has no DST since 2014)
+    # Included for compatibility with calendar apps that expect both components
+    daylight = TimezoneDaylight()
+    daylight.add("DTSTART", datetime(1970, 1, 1, 0, 0, 0))
+    daylight.add("TZOFFSETFROM", timedelta(hours=3))
+    daylight.add("TZOFFSETTO", timedelta(hours=3))
+    daylight.add("TZNAME", "MSK")
+    tz.add_component(daylight)
 
     return tz
 
@@ -86,6 +100,11 @@ def build_location(
 ) -> str | None:
     """Build a location string from auditorium and building info.
 
+    Cleans newlines from auditorium and building strings — Excel cells
+    can contain multi-line text (e.g., different auditoriums for different
+    subgroups separated by line breaks), which would produce unwanted \\n
+    in the ICS LOCATION field.
+
     Returns None if no location info is available.
     """
     if is_online:
@@ -93,9 +112,12 @@ def build_location(
 
     parts = []
     if auditorium:
-        parts.append(f"Ауд. {auditorium}")
+        # Replace newlines with comma+space for clean single-line output
+        clean_aud = auditorium.replace("\n", ", ")
+        parts.append(f"Ауд. {clean_aud}")
     if building:
-        parts.append(f"Корпус {building}")
+        clean_bld = building.replace("\n", ", ")
+        parts.append(f"Корпус {clean_bld}")
 
     if parts:
         return ", ".join(parts)
@@ -113,10 +135,19 @@ def build_summary(lesson_type: str, title: str) -> str:
 
 
 def build_description(teachers: list[str], source_text: str) -> str:
-    """Build an event description string."""
+    """Build an event description string.
+
+    Uses \\n (escaped newline) for line breaks, which icalendar
+    will serialize as literal \\n in the ICS file — the standard
+    way to represent line breaks in DESCRIPTION per RFC 5545.
+
+    Newlines in source_text are replaced with comma+space to prevent
+    unwanted line breaks in the ICS output.
+    """
     parts = []
     if teachers:
         parts.append(f"Преподаватель: {', '.join(teachers)}")
     if source_text:
-        parts.append(f"Источник: {source_text[:500]}")
-    return "\n".join(parts)
+        clean_source = source_text[:500].replace("\n", ", ")
+        parts.append(f"Источник: {clean_source}")
+    return "\\n".join(parts)

@@ -38,9 +38,13 @@ def generate_dates(
         result = list(block.dates)
     # 2. If period is provided, generate all dates in range matching day of week
     elif block.week_parity or day_name:
-        # Parse module period
-        period_start = _parse_date(module_period_start, year)
-        period_end = _parse_date(module_period_end, year)
+        # Use cell-specific period if available, otherwise fall back to module period
+        if block.period_start and block.period_end:
+            period_start = block.period_start
+            period_end = block.period_end
+        else:
+            period_start = _parse_date(module_period_start, year)
+            period_end = _parse_date(module_period_end, year)
 
         if period_start and period_end and day_name:
             weekday = russian_day_to_number(day_name)

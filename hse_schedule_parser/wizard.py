@@ -129,7 +129,15 @@ class WizardState:
 
 
 def _find_excel_in_root() -> list[Path]:
-    """Scan the project root directory for .xlsx files."""
+    """Scan the current working directory for .xlsx files.
+
+    The working directory (Path.cwd()) is typically the directory
+    where the user launched the application. Users can place their
+    schedule .xlsx files there for quick selection.
+
+    Returns:
+        Sorted list of Path objects for all .xlsx files found.
+    """
     root = Path.cwd()
     return sorted(root.glob("*.xlsx"))
 
@@ -138,8 +146,8 @@ def step_file(state: WizardState) -> StepResult:
     """Step 1: Select the Excel file with the schedule.
 
     Scans the project root for .xlsx files. If found, offers a choice:
-      1 — use the found file
-      2 — specify full path manually
+      - select from the list of found files
+      - specify full path manually
       ← — go back
       ✕ — exit
     If no .xlsx is found in root, shows an error and offers:
@@ -155,28 +163,41 @@ def step_file(state: WizardState) -> StepResult:
         show_info(
             "📂 Найдены файлы в текущей директории:\n"
             f"{file_list}\n\n"
-            "Выбери действие:"
+            "Выбери файл или укажи путь вручную:"
         )
+
+        # Build choices: one per file, then manual path, back, exit
+        choices = []
+        for f in found:
+            choices.append(f.name)
+        choices += ["Указать полный путь вручную", "← Назад", "✕ Выход"]
+
+        # Default to the first file or the last used file
+        default_choice = state.file_path and Path(state.file_path).name
+        if default_choice and default_choice in [f.name for f in found]:
+            default = default_choice
+        else:
+            default = found[0].name
+
         choice = ask_choice(
-            "Что делаем?",
-            choices=[
-                f"1 — продолжить с найденным файлом: {found[0].name}",
-                "2 — указать полный путь к таблице с расписанием",
-                "← Назад",
-                "✕ Выход",
-            ],
-            default=f"1 — продолжить с найденным файлом: {found[0].name}",
+            "📂 Выбери файл с расписанием:",
+            choices=choices,
+            default=default,
         )
         if choice is None or choice == "✕ Выход":
             return StepResult.exit()
         if choice == "← Назад":
             return StepResult.back()
 
-        if choice.startswith("1"):
-            state.file_path = str(found[0].resolve())
-            return StepResult.state(state)
-
-        # Fall through to manual path input
+        if choice == "Указать полный путь вручную":
+            pass  # Fall through to manual path input
+        else:
+            # Selected a file from the list
+            for f in found:
+                if f.name == choice:
+                    state.file_path = str(f.resolve())
+                    return StepResult.state(state)
+            # Fall through to manual path input
     else:
         # No files found in root
         show_error(

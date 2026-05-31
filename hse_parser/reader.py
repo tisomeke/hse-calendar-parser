@@ -67,36 +67,42 @@ class ReaderResult:
     """Upper-week dates from the 'Календарь' sheet, or None if unavailable."""
 
 
-def find_sheet_name(wb: openpyxl.Workbook, group_code: str) -> str | None:
-    """Find the correct sheet name for a given group code.
+def resolve_sheet_name(
+    wb: openpyxl.Workbook, course: int, group_code: str | None = None
+) -> str | None:
+    """Resolve the correct sheet name for a given course.
 
-    Uses the group code prefix to determine the course,
-    then finds the matching sheet. For 1st year, prefers
-    '1 курс.' (current module) over '1 курс' (module 2).
-    Falls back to the alternative sheet if the group is not
-    found in the preferred one.
+    For 1st year, prefers '1 курс.' (current module) over '1 курс' (module 2).
+    When group_code is provided, checks if the group exists in the preferred
+    sheet and falls back to the alternative if not found.
+
+    Args:
+        wb: The open workbook.
+        course: Course number (1-4).
+        group_code: Optional group code to verify group existence.
+
+    Returns:
+        Sheet name string, or None if no suitable sheet is found.
     """
-    prefix = group_code[:2]
-    course = COURSE_PREFIX_MAP.get(prefix)
-    if course is None:
+    base_name = COURSE_TO_SHEET.get(course)
+    if base_name is None:
         return None
 
-    base_name = COURSE_TO_SHEET[course]
     available = wb.sheetnames
 
-    # For 1st year, prefer "1 курс." (current module)
     if course == 1:
         preferred = "1 курс."
         alternative = "1 курс"
         if preferred in available:
-            # Check if group exists in preferred sheet
-            ws = wb[preferred]
-            if _group_exists_in_sheet(ws, group_code):
-                return preferred
-            # Fall back to alternative
-            if alternative in available:
-                return alternative
-            return None
+            if group_code is not None:
+                ws = wb[preferred]
+                if _group_exists_in_sheet(ws, group_code):
+                    return preferred
+                # Fall back to alternative
+                if alternative in available:
+                    return alternative
+                return None
+            return preferred
         if alternative in available:
             return alternative
         return None
@@ -104,6 +110,20 @@ def find_sheet_name(wb: openpyxl.Workbook, group_code: str) -> str | None:
     if base_name in available:
         return base_name
     return None
+
+
+def find_sheet_name(wb: openpyxl.Workbook, group_code: str) -> str | None:
+    """Find the correct sheet name for a given group code.
+
+    Uses the group code prefix to determine the course,
+    then resolves the sheet name via resolve_sheet_name().
+    """
+    prefix = group_code[:2]
+    course = COURSE_PREFIX_MAP.get(prefix)
+    if course is None:
+        return None
+
+    return resolve_sheet_name(wb, course, group_code=group_code)
 
 
 def _group_exists_in_sheet(ws: openpyxl.Worksheet, group_code: str) -> bool:
@@ -300,11 +320,19 @@ def read_schedule(
 
             aud_text = ""
             if aud_cell and aud_cell.value is not None:
-                aud_text = str(aud_cell.value)
+                val = aud_cell.value
+                if isinstance(val, float) and val == int(val):
+                    aud_text = str(int(val))
+                else:
+                    aud_text = str(val)
 
             build_text = ""
             if build_cell and build_cell.value is not None:
-                build_text = str(build_cell.value)
+                val = build_cell.value
+                if isinstance(val, float) and val == int(val):
+                    build_text = str(int(val))
+                else:
+                    build_text = str(val)
 
             if current_day is None:
                 continue

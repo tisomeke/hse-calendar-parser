@@ -23,6 +23,7 @@ from hse_parser.reader import (
     _group_exists_in_sheet,
     extract_title_info,
     find_group_columns,
+    resolve_sheet_name,
 )
 from hse_parser.utils import normalize_group_code
 
@@ -50,22 +51,33 @@ DAY_ROW_OFFSETS = [3, 4, 5, 6, 7, 8, 9]  # rows 10-16, 21-27, 32-38, 43-49
 FIRST_DATA_COL = 4
 
 
+def _open_workbook_readonly(file_path: str | Path) -> openpyxl.Workbook | None:
+    """Open an .xlsx workbook in read-only mode.
+
+    Returns the workbook, or None if the file doesn't exist or can't be opened.
+    """
+    file_path = Path(file_path)
+    if not file_path.exists():
+        return None
+    try:
+        return openpyxl.load_workbook(str(file_path), read_only=True)
+    except Exception:
+        return None
+
+
 def detect_courses(file_path: str | Path) -> list[int]:
     """Detect which course sheets are available in the workbook.
 
     Returns a sorted list of course numbers (e.g. [1, 2, 3, 4]).
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
+    wb = _open_workbook_readonly(file_path)
+    if wb is None:
         return []
 
     try:
-        wb = openpyxl.load_workbook(str(file_path), read_only=True)
-    except Exception:
-        return []
-
-    available_sheets = set(wb.sheetnames)
-    wb.close()
+        available_sheets = set(wb.sheetnames)
+    finally:
+        wb.close()
 
     courses: list[int] = []
     for course_num, sheet_name in COURSE_TO_SHEET.items():
@@ -84,38 +96,30 @@ def detect_groups(file_path: str | Path, course: int) -> list[str]:
 
     Returns a sorted list of group code strings.
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
+    wb = _open_workbook_readonly(file_path)
+    if wb is None:
         return []
 
     try:
-        wb = openpyxl.load_workbook(str(file_path), read_only=True)
-    except Exception:
-        return []
+        sheet_name = resolve_sheet_name(wb, course)
+        if sheet_name is None or sheet_name not in wb.sheetnames:
+            return []
 
-    # Determine sheet name
-    sheet_name = COURSE_TO_SHEET.get(course)
-    if course == 1 and "1 курс." in wb.sheetnames:
-        sheet_name = "1 курс."
+        ws = wb[sheet_name]
+        groups: list[str] = []
 
-    if sheet_name not in wb.sheetnames:
+        # Scan row 10 for group codes
+        for row in ws.iter_rows(min_row=10, max_row=10, values_only=False):
+            for cell in row:
+                if cell.value is not None:
+                    val = str(cell.value).strip()
+                    # Match group code pattern: 2 digits + letters
+                    if re.match(r"^\d{2}[А-ЯЁа-яё0-9]+$", val):
+                        groups.append(val)
+
+        return sorted(set(groups))
+    finally:
         wb.close()
-        return []
-
-    ws = wb[sheet_name]
-    groups: list[str] = []
-
-    # Scan row 10 for group codes
-    for row in ws.iter_rows(min_row=10, max_row=10, values_only=False):
-        for cell in row:
-            if cell.value is not None:
-                val = str(cell.value).strip()
-                # Match group code pattern: 2 digits + letters
-                if re.match(r"^\d{2}[А-ЯЁа-яё0-9]+$", val):
-                    groups.append(val)
-
-    wb.close()
-    return sorted(set(groups))
 
 
 def detect_module_info(
@@ -125,36 +129,28 @@ def detect_module_info(
 
     Returns dict with 'module', 'period_start', 'period_end' or None.
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
+    wb = _open_workbook_readonly(file_path)
+    if wb is None:
         return None
 
     try:
-        wb = openpyxl.load_workbook(str(file_path), read_only=True)
-    except Exception:
-        return None
+        sheet_name = resolve_sheet_name(wb, course)
+        if sheet_name is None or sheet_name not in wb.sheetnames:
+            return None
 
-    sheet_name = COURSE_TO_SHEET.get(course)
-    if course == 1 and "1 курс." in wb.sheetnames:
-        sheet_name = "1 курс."
+        ws = wb[sheet_name]
+        title_info = extract_title_info(ws)
+        if title_info is None:
+            return None
 
-    if sheet_name not in wb.sheetnames:
+        module, period_start, period_end = title_info
+        return {
+            "module": module,
+            "period_start": period_start,
+            "period_end": period_end,
+        }
+    finally:
         wb.close()
-        return None
-
-    ws = wb[sheet_name]
-    title_info = extract_title_info(ws)
-    wb.close()
-
-    if title_info is None:
-        return None
-
-    module, period_start, period_end = title_info
-    return {
-        "module": module,
-        "period_start": period_start,
-        "period_end": period_end,
-    }
 
 
 def detect_subgroups(
@@ -165,58 +161,49 @@ def detect_subgroups(
     Scans the schedule data for 'гр.1' and 'гр.2' markers.
     Returns list of detected subgroup numbers (e.g. [1, 2] or []).
     """
-    file_path = Path(file_path)
-    if not file_path.exists():
+    wb = _open_workbook_readonly(file_path)
+    if wb is None:
         return []
 
     try:
-        wb = openpyxl.load_workbook(str(file_path), read_only=True)
-    except Exception:
-        return []
+        # Find the right sheet
+        prefix = group_code[:2]
+        course = COURSE_PREFIX_MAP.get(prefix)
+        if course is None:
+            return []
 
-    # Find the right sheet
-    prefix = group_code[:2]
-    course = COURSE_PREFIX_MAP.get(prefix)
-    if course is None:
+        sheet_name = resolve_sheet_name(wb, course)
+        if sheet_name is None or sheet_name not in wb.sheetnames:
+            return []
+
+        ws = wb[sheet_name]
+
+        # Find group columns
+        columns = find_group_columns(ws, group_code)
+        if columns is None:
+            return []
+
+        subject_col, _, _ = columns
+        from hse_parser.reader import _col_to_index
+
+        subj_idx = _col_to_index(subject_col)
+        subgroups: set[int] = set()
+
+        for row_cells in ws.iter_rows(min_row=12, values_only=False):
+            if subj_idx >= len(row_cells):
+                continue
+            cell = row_cells[subj_idx]
+            if cell.value is not None:
+                text = str(cell.value)
+                # Look for "гр.1" or "гр.2" patterns
+                for match in re.finditer(r"гр\.?\s*(\d+)", text):
+                    sg = int(match.group(1))
+                    if sg in (1, 2):
+                        subgroups.add(sg)
+
+        return sorted(subgroups)
+    finally:
         wb.close()
-        return []
-
-    sheet_name = COURSE_TO_SHEET.get(course)
-    if course == 1 and "1 курс." in wb.sheetnames:
-        sheet_name = "1 курс."
-
-    if sheet_name not in wb.sheetnames:
-        wb.close()
-        return []
-
-    ws = wb[sheet_name]
-
-    # Find group columns
-    columns = find_group_columns(ws, group_code)
-    if columns is None:
-        wb.close()
-        return []
-
-    subject_col, _, _ = columns
-    from hse_parser.reader import _col_to_index
-
-    subj_idx = _col_to_index(subject_col)
-    subgroups: set[int] = set()
-
-    for row_cells in ws.iter_rows(min_row=12, values_only=False):
-        if subj_idx >= len(row_cells):
-            continue
-        cell = row_cells[subj_idx]
-        if cell.value is not None:
-            text = str(cell.value)
-            # Look for "гр.1" or "гр.2" patterns
-            for match in re.finditer(r"гр\.?\s*(\d+)", text):
-                sg = int(match.group(1))
-                if sg in (1, 2):
-                    subgroups.add(sg)
-
-    wb.close()
-    return sorted(subgroups)
 
 
 def suggest_academic_year() -> int:
@@ -315,83 +302,80 @@ def parse_calendar_sheet(file_path: str | Path) -> frozenset[date] | None:
     except Exception:
         return None
 
-    if "Календарь" not in wb.sheetnames:
-        wb.close()
-        return None
+    try:
+        if "Календарь" not in wb.sheetnames:
+            return None
 
-    ws = wb["Календарь"]
+        ws = wb["Календарь"]
 
-    # Extract academic year from title
-    title_cell = ws.cell(row=1, column=1).value
-    if title_cell is None:
-        wb.close()
-        return None
+        # Extract academic year from title
+        title_cell = ws.cell(row=1, column=1).value
+        if title_cell is None:
+            return None
 
-    ac_year = _extract_academic_year_from_title(str(title_cell))
-    if ac_year is None:
-        wb.close()
-        return None
+        ac_year = _extract_academic_year_from_title(str(title_cell))
+        if ac_year is None:
+            return None
 
-    # Read the upper-week fill colour from the legend (rows 3-5)
-    upper_fill = _read_upper_week_fill(ws)
-    if upper_fill is None:
-        wb.close()
-        return None
+        # Read the upper-week fill colour from the legend (rows 3-5)
+        upper_fill = _read_upper_week_fill(ws)
+        if upper_fill is None:
+            return None
 
-    max_col = ws.max_column or 0
-    if max_col < FIRST_DATA_COL:
-        wb.close()
-        return None
+        max_col = ws.max_column or 0
+        if max_col < FIRST_DATA_COL:
+            return None
 
-    upper_dates: set[date] = set()
+        upper_dates: set[date] = set()
 
-    for block_start in MODULE_BLOCK_ROWS:
-        header_row = block_start + 1
+        for block_start in MODULE_BLOCK_ROWS:
+            header_row = block_start + 1
 
-        # Build month column mapping for this module block
-        col_to_month = _build_month_column_map(ws, header_row, max_col)
-        if not col_to_month:
-            continue
-
-        # Process each day-of-week row
-        for offset in DAY_ROW_OFFSETS:
-            row_num = block_start + offset
-            if row_num > (ws.max_row or 0):
+            # Build month column mapping for this module block
+            col_to_month = _build_month_column_map(ws, header_row, max_col)
+            if not col_to_month:
                 continue
 
-            for col in range(FIRST_DATA_COL, max_col + 1):
-                cell = ws.cell(row=row_num, column=col)
-                if cell.value is None:
+            # Process each day-of-week row
+            for offset in DAY_ROW_OFFSETS:
+                row_num = block_start + offset
+                if row_num > (ws.max_row or 0):
                     continue
 
-                month_num = col_to_month.get(col)
-                if month_num is None:
-                    continue
+                for col in range(FIRST_DATA_COL, max_col + 1):
+                    cell = ws.cell(row=row_num, column=col)
+                    if cell.value is None:
+                        continue
 
-                # Determine year: Sept-Dec use ac_year, Jan-Aug use ac_year + 1
-                if month_num >= 9:
-                    year = ac_year
-                else:
-                    year = ac_year + 1
+                    month_num = col_to_month.get(col)
+                    if month_num is None:
+                        continue
 
-                # Check if value is a number (date)
-                try:
-                    day_num = int(float(str(cell.value)))
-                except (ValueError, TypeError):
-                    continue
+                    # Determine year: Sept-Dec use ac_year, Jan-Aug use ac_year + 1
+                    if month_num >= 9:
+                        year = ac_year
+                    else:
+                        year = ac_year + 1
 
-                if not (1 <= day_num <= 31):
-                    continue
+                    # Check if value is a number (date)
+                    try:
+                        day_num = int(float(str(cell.value)))
+                    except (ValueError, TypeError):
+                        continue
 
-                # Check fill colour against the dynamically-read legend colour
-                fill = cell.fill
-                fg_color = fill.fgColor
-                if fg_color and fg_color.rgb and fg_color.rgb != "00000000":
-                    if fg_color.rgb == upper_fill:
-                        try:
-                            upper_dates.add(date(year, month_num, day_num))
-                        except ValueError:
-                            continue
+                    if not (1 <= day_num <= 31):
+                        continue
 
-    wb.close()
-    return frozenset(upper_dates)
+                    # Check fill colour against the dynamically-read legend colour
+                    fill = cell.fill
+                    fg_color = fill.fgColor
+                    if fg_color and fg_color.rgb and fg_color.rgb != "00000000":
+                        if fg_color.rgb == upper_fill:
+                            try:
+                                upper_dates.add(date(year, month_num, day_num))
+                            except ValueError:
+                                continue
+
+        return frozenset(upper_dates)
+    finally:
+        wb.close()

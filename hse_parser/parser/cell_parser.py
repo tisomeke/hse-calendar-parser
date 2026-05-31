@@ -7,6 +7,7 @@ from datetime import date
 
 from hse_parser.models import RawLessonBlock
 from hse_parser.parser.date_parser import parse_dates_from_block
+from hse_parser.parser.line_filters import should_skip_line
 from hse_parser.parser.rules import should_skip
 from hse_parser.parser.text_cleaner import normalize_text, split_into_blocks
 
@@ -110,6 +111,8 @@ def _parse_single_block(
     lesson.recovery_date = date_result.recovery_dates[0] if date_result.recovery_dates else None
     lesson.is_cancelled = bool(date_result.cancelled_dates)
     lesson.location_override = date_result.location_overrides
+    lesson.period_start = date_result.period_start
+    lesson.period_end = date_result.period_end
 
     # 2. Extract lesson type from text
     lesson_type = _extract_lesson_type(text)
@@ -203,50 +206,16 @@ def _extract_title_and_teacher(
 
     The title is typically the first meaningful line after removing
     date/type information. Teacher names follow the title.
+
+    Line filtering is delegated to hse_parser.parser.line_filters.
     """
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-    # Remove known pattern lines
+    # Remove known pattern lines using line_filters module
     cleaned_lines = []
     for line in lines:
-        # Skip separator lines (underscores or dashes, ≥10 chars)
-        if re.match(r"^[_\-]{10,}$", line):
+        if should_skip_line(line, lesson_type):
             continue
-        # Skip period lines like "с 12.01 по 23.03"
-        if re.match(r"с\s+\d{1,2}\.\d{1,2}\.?\s*по\s+\d{1,2}\.\d{1,2}\.?\s*", line, re.IGNORECASE):
-            continue
-        # Skip date-only lines
-        if re.match(r"^[\d\s,.\-–/()a-zа-яё]+$", line, re.IGNORECASE):
-            # Check if it's mostly dates
-            date_count = len(re.findall(r"\d{1,2}\.\d{2}", line))
-            if date_count > 0 and date_count >= len(re.findall(r"[а-яё]", line)):
-                continue
-        # Skip week parity lines
-        if re.match(r"(верхн|нижн)[яа]я\s+неделя", line, re.IGNORECASE):
-            continue
-        # Skip cancellation/recovery lines
-        if "отмена" in line or "восстановление" in line or "восстановлено" in line:
-            continue
-        # Skip make-up lines
-        if re.match(r"\d{1,2}\.\d{2}\s*\(за\s+\d{1,2}\.\d{2}\)", line):
-            continue
-        # Skip location override lines
-        if re.match(r"\d{1,2}\.\d{2}\s+(?:ауд\.|в)\s+", line):
-            continue
-        # Skip lines that are JUST a parenthesized type (e.g., "(семинары)")
-        # but NOT lines where the type is part of a title (e.g., "Теория языка I (семинары)")
-        if re.match(r"^\([^)]*\)$", line.strip()):
-            continue
-        # Skip lines that are ONLY the lesson type (no other content)
-        # This is a more targeted check: if the line IS the lesson type
-        # (e.g., "семинар" as a standalone line), skip it.
-        # But do NOT skip lines like "Теория языка I (семинары)" where
-        # the type is embedded in a longer title.
-        if lesson_type:
-            line_lower = line.lower()
-            # Only skip if the line is EXACTLY the lesson type (possibly with whitespace/parentheses)
-            if line_lower == lesson_type or line_lower == f"({lesson_type})":
-                continue
         cleaned_lines.append(line)
 
     # Find teacher names

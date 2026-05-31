@@ -28,8 +28,9 @@ class DateParseResult:
 DATE_LIST_PATTERN = re.compile(r"(\d{1,2})\.(\d{2})")
 
 # Pattern: period like "с 12.01 по 23.03" or "с 12.01. по 16.02"
+# Accept both Cyrillic 'с' (U+0441) and Latin 'c' (U+0063)
 PERIOD_PATTERN = re.compile(
-    r"с\s+(\d{1,2})\.(\d{1,2})\.?\s*по\s+(\d{1,2})\.(\d{1,2})\.?"
+    r"[сc]\s+(\d{1,2})\.(\d{1,2})\.?\s*по\s+(\d{1,2})\.(\d{1,2})\.?"
 )
 
 # Pattern: cancellation "12.01 - отмена" or "12.01-отмена"
