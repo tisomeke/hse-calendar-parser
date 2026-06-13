@@ -134,6 +134,9 @@ def build_summary(lesson_type: str, title: str) -> str:
     return title
 
 
+WATERMARK = "Создано с помощью hse-calendar-parser (https://github.com/tisomeke/hse-calendar-parser)"
+
+
 def build_description(teachers: list[str], source_text: str) -> str:
     """Build an event description string.
 
@@ -143,6 +146,8 @@ def build_description(teachers: list[str], source_text: str) -> str:
 
     Newlines in source_text are replaced with comma+space to prevent
     unwanted line breaks in the ICS output.
+
+    Appends a watermark with a link to the project repository.
     """
     parts = []
     if teachers:
@@ -150,4 +155,5 @@ def build_description(teachers: list[str], source_text: str) -> str:
     if source_text:
         clean_source = source_text[:500].replace("\n", ", ")
         parts.append(f"Источник: {clean_source}")
+    parts.append(WATERMARK)
     return "\\n".join(parts)
