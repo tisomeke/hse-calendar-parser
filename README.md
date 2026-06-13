@@ -36,12 +36,20 @@
 
 ## Быстрый старт
 
+### Linux/MacOS
 ```bash
 git clone https://github.com/tisomeke/hse-calendar-parser.git
 cd hse-calendar-parser
 python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# или .venv\Scripts\activate  # Windows
+source .venv/bin/activate
+pip install -e .
+```
+### Windows
+```bash
+git clone https://github.com/tisomeke/hse-calendar-parser.git
+cd hse-calendar-parser
+python -m venv .venv
+.venv\Scripts\activate
 pip install -e .
 ```
 
